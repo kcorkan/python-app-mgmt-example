@@ -7,6 +7,15 @@ This script contains examples for how to:
 
 ### Usage
 
+```
+python3 app.py -c config_file.yaml 
+```
+
+#### Pre-requisites
+
+1.  Rally username/password
+2.  Raw url to an app to install
+3.  Settings names for configurations in app
 
 #### Configuration file 
 Create a yaml configuration file for your dashboard that has the following structure:
