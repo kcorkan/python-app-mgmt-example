@@ -1,9 +1,10 @@
-# Example App Management scriptt 
+# Example App Management script 
 
 This script contains examples for how to:
 * create a dashboard page in Rally 
-* add an app to a dashboard page and install html based on a github urls
-* configure the app 
+* add one or more custom app(s) to a dashboard page
+* install html based on a github urls
+* configure the app(s) 
 
 ### Usage
 
