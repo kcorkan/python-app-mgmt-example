@@ -9,7 +9,7 @@ import json
 from urllib import parse
 from requests.auth import HTTPBasicAuth
 import getpass
-
+import yaml
 
 uri_host = 'https://rally1.rallydev.com'
 
@@ -18,6 +18,8 @@ uri_auth = '{0}/slm/webservice/v2.0/security/authorize'
 uri_make_app = '{0}/slm/dashboard/addpanel.sp?cpoid=232318459988&_slug=/custom/{1}&key={2}'
 uri_install_app = '{0}/slm/dashboard/changepanelsettings.sp?cpoid=10909656256&_slug=/custom/{1}&key={2}'
 uri_page_layout = '{0}/slm/dashboardSwitchLayout.sp?dashboardName={1}}&layout={2}&oid={3}'
+uri_pref_put = '{0}/slm/webservice/v2.0/Preference/create?key={1}'
+uri_pref_get = '{0}/slm/webservice/v2.0/Preference?query=(AppId = \"{1}\")&fetch=Name'
 
 #These are hardcoded, do not change
 params_make_page_cpoid = 729766
@@ -28,52 +30,72 @@ verify_cert_path = False
 
 def main():
     
+    requests.packages.urllib3.disable_warnings() 
     p = argparse.ArgumentParser()
-    p.add_argument('-u', '--user', help="Rally username")
-    p.add_argument('-p', '--password', help="Rally password")
-    p.add_argument('-n', '--pagename', default="New Page", help="Rally Custom Page Name")
-    p.add_argument('-o', '--pageoid', default=None, help="Page Oid if adding an app to an existing page")
-    p.add_argument('-t','--apptitle', default="New App Title", help="Rally App Title")
-    p.add_argument('-a','--appurl', default=None, help="URL to raw app html")
-    p.add_argument('-l', '--layout', default='SINGLE', help='Page layout options: SINGLE (default), TWO_SPLIT, TWO_WEIGHTED_LEFT, TWO_WEIGHTED_RIGHT, THREE_WEIGHTED_CENTER')
-    p.add_argument('command',nargs=2,help="Command to execute: [create|config] [app|page]")
-    
-    options = p.parse_args()
+    p.add_argument('-c', '--cfg')
 
-    hardcoded_password = getpass.getpass("Rally password: ")
-    ## print(hardcoded_password)
+    options = p.parse_args()
+    cfg_file = options.cfg
+    cfg = read_config(options.cfg)
+    #print (cfg)
     
+    pwd = cfg['connection']['password']
+  
+    ##### prompt for password if we don't want to store in a file 
+    if pwd == None or pwd == '': 
+        pwd = getpass.getpass("Rally password: ")
+      
     ###### authenticate rally 
     uri = uri_auth.format(uri_host)
     s = requests.Session()
     
-    response = s.get(uri,verify=verify_cert_path,auth=HTTPBasicAuth(options.user, hardcoded_password))
+    user = cfg['connection']['user']
+    
+    response = s.get(uri,verify=verify_cert_path,auth=HTTPBasicAuth(user, pwd))
     if response.status_code > 299:
         print ('Error authenticating %s' % response.status_code)
         return 
     response_payload = json.loads(response.text)
     token = response_payload['OperationResult']['SecurityToken']
-
-    if options.command[0] != 'create':
-        print ('{0} {1} command is not valid. Usage: [create] [app|page]'.format(options.command[0],options.command[1]))
-        return 
-
-    if options.command[1] != 'page' and options.command[1] != 'app':
-        print ('{0} {1} command is not valid. Usage: [create] [app|page]'.format(options.command[0],options.command[1]))
-        return 
-
-    if options.command[1] == 'page':
-        ## TODO validation pagename was provided 
-        #make the page 
-        page_oid = create_page(s,token,options.user,hardcoded_password,options.pagename)
-        return page_oid 
     
-    if options.command[1] == 'app':
-        ## TODO validate app_title, app_path is provided 
-        # load desired app
-        app_oid = create_app(s, token, options.user, hardcoded_password,options.pageoid,options.apptitle,options.appurl)
-        return app_oid 
-     
+    page_oid = cfg['page']['oid']
+    if page_oid == 0 or page_oid == None:
+        page_oid = create_page(s,token,user,pwd,cfg['page']['title'])
+        cfg['page']['oid'] = page_oid
+
+
+    #print (cfg['apps'])
+    for a in cfg['apps']:
+            app_oid = a['oid']
+            if app_oid == 0 or app_oid == None:
+                print ('> Creating app [{0}]\n'.format(a['title']))
+                app_oid = create_app(s, token, user, pwd,page_oid,a['title'],a['raw_url'])
+                a['oid'] = app_oid
+
+            print(app_oid)
+            for c in a['configs']:
+                print ('>> Configuring app [{0}]\n'.format(a['title']))
+                pref_name = c['name']
+                pref_value = c['value']
+                #print (type(pref_value))
+                if type(pref_value != str):
+                    print ('>>> Serializing preference [{0}]\n'.format(pref_name))
+                    pref_value = json.dumps(pref_value, separators=(',', ':'))
+                #print (type(pref_value))    
+                
+                create_or_update_pref(s,token,user,pwd,app_oid,pref_name,pref_value)
+                
+
+
+    save_config(cfg_file,cfg)            
+
+def read_config(file_path):
+    with open(file_path, "r") as f:
+        return yaml.safe_load(f)
+
+def save_config(file_path, cfg_obj):
+    with open(file_path, 'w') as file:
+        documents = yaml.dump(cfg_obj, file)
 
 def create_page(session, token, username, password, pagename):
     uri = uri_make_page.format(uri_host,token)   
@@ -86,7 +108,7 @@ def create_page(session, token, username, password, pagename):
         'timeboxFilter':'none'
     }
    
-    print('Creating page: %s' % pagename);
+    print('> Creating page: %s\n' % pagename);
     post_response = session.post(uri,auth=HTTPBasicAuth(username, password),data=payload,verify=verify_cert_path)
     ## print('post request: %s' % post_response.text)
     if post_response.status_code > 299:
@@ -99,7 +121,7 @@ def create_page(session, token, username, password, pagename):
     if oid_search:
         page_oid = oid_search.group(1)
     
-    print('{0} page created with oid: {1}.  Use the following command to add apps to this page: \n\n  python3 app.py createt app -u username -o {1} -t MyAppTitle -a https://github.com/url/to/app.txt'.format(pagename, page_oid))
+    print('>> {0} page created with oid: {1}\n'.format(pagename, page_oid))
     return page_oid 
 
 def create_app(session, token, username, password, page_oid, app_title, app_url):
@@ -114,7 +136,7 @@ def create_app(session, token, username, password, page_oid, app_title, app_url)
         'dashboardName': dashboard_name
     }
     post_response = session.post(uri,auth=HTTPBasicAuth(username, password),data=payload,verify=verify_cert_path)
-    print('makeApp post request: %s' % post_response.text)
+    #print('makeApp post request: %s' % post_response.text)
     make_app_response = json.loads(post_response.text)
         
     # extract panel oid 
@@ -147,10 +169,37 @@ def create_app(session, token, username, password, page_oid, app_title, app_url)
         print('Error installing app %s' % post_response.text)
         return 
 
-    print('App installed successfully on page {0} to panel {1}.  Make note of this information to make changes to configuration.'.format(page_oid,panel_oid))
+    print('>> App [{2}] installed successfully on page {0} to panel {1}.'.format(page_oid,panel_oid,app_title))
 
     ### TODO: Return the panel oid so that we can refer to it again for configuratoin
     return panel_oid
+
+def create_or_update_pref (session, token, username, password, panel_oid, pref_name,pref_value):
+
+    uri_get = uri_pref_get.format(uri_host,panel_oid)
+    existing_prefs = session.get(uri_get,auth=HTTPBasicAuth(username, password))
+   
+    prefs = json.loads(existing_prefs.text)
+    pref_uri = uri_pref_put.format(uri_host,token)
+    if prefs['QueryResult']['TotalResultCount'] > 0:
+        prefs = prefs['QueryResult']['Results']
+        for p in prefs:
+            if p['_refObjectName'] == pref_name:
+                print ('Preference [{0}] found: {1}'.format(pref_name,p['_ref']))
+                pref_uri = '{0}?key={1}'.format(p['_ref'],token)
+
+    
+    #headers = {"Content-Type":"application/json"}
+    payload = {
+        'Preference': {
+                'Name': pref_name, 
+                'Value': pref_value,
+                'AppId': panel_oid
+            } 
+    }
+    payload = json.dumps(payload)
+    put_response = session.put(pref_uri,auth=HTTPBasicAuth(username, password),data=payload,verify=verify_cert_path)
+    print ('... Preference [{1}] updated: \n\n{0}'.format(put_response.text,pref_name))
 
 if (__name__ == "__main__"):
     main()

@@ -1,0 +1,20 @@
+apps:
+- configs:
+  - name: html
+    value: there are {x} x stories!
+  - name: countVariables
+    value:
+    - artifactType: HierarchicalRequirement
+      id: x
+      query: (Name contains \"x\")
+  oid: 0
+  raw_url: https://raw.githubusercontent.com/RallyCommunity/query-counter/master/deploy/Ugly.txt
+  title: My Special App Title
+connection:
+  host: https://rally1.rallydev.com
+  password: null
+  user: user@company.com
+page:
+  layout: SINGLE
+  oid: 0
+  title: My Page Title
